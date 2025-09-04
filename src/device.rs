@@ -1,6 +1,7 @@
 use esp_hal::{
-    i2c::master::{Error, I2c, I2cAddress},
-    uart::{RxError, TxError, Uart},
+    i2c::master::{Config, Error, I2c, I2cAddress},
+    peripherals::*,
+    uart::{self, RxError, TxError, Uart},
     Async,
 };
 use ublox::{
@@ -112,10 +113,13 @@ pub struct Device {
 }
 
 impl Device {
-    pub async fn new(
-        mut uart_port: Uart<'static, Async>,
-        i2c_port: I2c<'static, Async>,
-    ) -> Result<Self, TxError> {
+    pub async fn new(uart: UART0<'static>, i2c: I2C0<'static>) -> Result<Self, TxError> {
+        let config = uart::Config::default().with_baudrate(115200);
+        let mut uart_port = Uart::new(uart, config).unwrap().into_async();
+
+        let config = Config::default();
+        let i2c_port = I2c::new(i2c, config).unwrap().into_async();
+
         uart_port
             .write_async(
                 CfgPrtUartBuilder {
@@ -165,7 +169,7 @@ impl Device {
                 Some(Ok(packet)) => {
                     self.handle_packet(packet);
                 }
-                Some(Err(e)) => {
+                Some(Err(_)) => {
                     // bad packet
                 }
                 None => {

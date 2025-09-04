@@ -1,7 +1,3 @@
-#![no_std]
-#![no_main]
-#![feature(f16)]
-
 use esp_hal::{
     i2c::master::{Error, I2c, I2cAddress},
     uart::{RxError, TxError, Uart},
@@ -101,7 +97,14 @@ impl Default for Hmc5883IState {
     }
 }
 
-struct Device {
+impl Hmc5883IState {
+    /// Calculates heading in radians
+    fn heading(&mut self) -> f32 {
+        micromath::F32::atan2(self.y_guass.into(), self.x_guass.into()).into()
+    }
+}
+
+pub struct Device {
     uart_port: Uart<'static, Async>,
     i2c_port: I2c<'static, Async>,
     nav_pvt_state: NavPvtState,
@@ -109,7 +112,7 @@ struct Device {
 }
 
 impl Device {
-    async fn new(
+    pub async fn new(
         mut uart_port: Uart<'static, Async>,
         i2c_port: I2c<'static, Async>,
     ) -> Result<Self, TxError> {

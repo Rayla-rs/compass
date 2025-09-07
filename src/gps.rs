@@ -1,5 +1,7 @@
+use core::cell::Cell;
+
+use critical_section::Mutex;
 use esp_hal::{
-    i2c::master::{Config, Error, I2c, I2cAddress},
     peripherals::*,
     uart::{self, RxError, TxError, Uart},
     Async,
@@ -8,6 +10,15 @@ use ublox::{
     CfgPrtUartBuilder, FixedLinearBuffer, GnssFixType, InProtoMask, NavPvtFlags, NavPvtFlags2,
     OutProtoMask, PacketRef, Parser, UartMode,
 };
+
+//TASK FOR EMBASSY
+// static NAV_PTR_STATE: Mutex<Cell<NavPvtState>> = Mutex::new(Cell::new(NavPvtState::new()));
+
+// #[embassy_executor::task]
+// pub async fn gps_task(uart: UART0<'static>) {
+//     let gps = Gps::new(uart);
+//     gps.await.unwrap();
+// }
 
 #[allow(dead_code)]
 pub struct NavPvtState {
@@ -45,8 +56,8 @@ pub struct NavPvtState {
     pub flags2: NavPvtFlags2,
 }
 
-impl Default for NavPvtState {
-    fn default() -> Self {
+impl NavPvtState {
+    const fn new() -> Self {
         Self {
             time_tag: f64::NAN,
             year: 0,
@@ -82,43 +93,15 @@ impl Default for NavPvtState {
     }
 }
 
-struct Hmc5883IState {
-    x_guass: f32,
-    z_guass: f32,
-    y_guass: f32,
-}
-
-impl Default for Hmc5883IState {
-    fn default() -> Self {
-        Hmc5883IState {
-            x_guass: f32::NAN,
-            z_guass: f32::NAN,
-            y_guass: f32::NAN,
-        }
-    }
-}
-
-impl Hmc5883IState {
-    /// Calculates heading in radians
-    fn heading(&mut self) -> f32 {
-        micromath::F32::atan2(self.y_guass.into(), self.x_guass.into()).into()
-    }
-}
-
-pub struct Device {
+pub struct Gps {
     uart_port: Uart<'static, Async>,
-    i2c_port: I2c<'static, Async>,
     nav_pvt_state: NavPvtState,
-    hmc5882i_state: Hmc5883IState,
 }
 
-impl Device {
-    pub async fn new(uart: UART0<'static>, i2c: I2C0<'static>) -> Result<Self, TxError> {
+impl Gps {
+    pub async fn new(uart: UART0<'static>) -> Result<Self, TxError> {
         let config = uart::Config::default().with_baudrate(115200);
         let mut uart_port = Uart::new(uart, config).unwrap().into_async();
-
-        let config = Config::default();
-        let i2c_port = I2c::new(i2c, config).unwrap().into_async();
 
         uart_port
             .write_async(
@@ -144,14 +127,11 @@ impl Device {
 
         Ok(Self {
             uart_port,
-            i2c_port,
-            nav_pvt_state: NavPvtState::default(),
-            hmc5882i_state: Hmc5883IState::default(),
+            nav_pvt_state: NavPvtState::new(),
         })
     }
 
-    async fn run(&mut self) -> Result<(), RxError> {
-        // loop {
+    pub async fn process(&mut self) -> Result<(), RxError> {
         const MAX_PAYLOAD_LEN: usize = 1240;
 
         let mut buf = [0u8; MAX_PAYLOAD_LEN];
@@ -159,9 +139,6 @@ impl Device {
 
         let mut local_buf = [0; MAX_PAYLOAD_LEN];
         let nbytes = self.read_uart(&mut local_buf).await?;
-        if nbytes == 0 {
-            // break;
-        };
 
         let mut it = parser.consume_ubx(&local_buf[..nbytes]);
         loop {
@@ -190,52 +167,12 @@ impl Device {
         self.uart_port.write_async(data).await
     }
 
-    async fn update_hmc5883i(&mut self) -> Result<(), Error> {
-        let mut buf = [0u8; 6];
-        let mut gain = [0u8; 1];
-
-        self.i2c_port.read_async(1, &mut gain[0..=0]).await?;
-        let gain = gain[0] >> 5;
-        let resolution: f32 = match gain {
-            0x00 => 0.73,
-            0x01 => 0.92,
-            0x02 => 1.22,
-            0x03 => 1.52,
-            0x04 => 2.27,
-            0x05 => 2.56,
-            0x06 => 3.03,
-            0x07 => 4.35,
-            _ => 0.0,
-        };
-
-        self.i2c_port.read_async(3, &mut buf[0..=0]).await?; // x
-        self.i2c_port.read_async(4, &mut buf[1..=1]).await?;
-        self.i2c_port.read_async(5, &mut buf[2..=2]).await?; // z
-        self.i2c_port.read_async(6, &mut buf[3..=3]).await?;
-        self.i2c_port.read_async(7, &mut buf[4..=4]).await?; // y
-        self.i2c_port.read_async(8, &mut buf[5..=5]).await?;
-
-        let raw = [
-            (((buf[0] as i16) << 8) | buf[1] as i16),
-            (((buf[2] as i16) << 8) | buf[6] as i16),
-            (((buf[4] as i16) << 8) | buf[5] as i16),
-        ];
-
-        self.hmc5882i_state = Hmc5883IState {
-            x_guass: (raw[0] as f32) * resolution,
-            y_guass: (raw[1] as f32) * resolution,
-            z_guass: (raw[2] as f32) * resolution,
-        };
-
-        Ok(())
-    }
-
     fn handle_packet(&mut self, packet: PacketRef<'_>) {
         match packet {
             PacketRef::NavPvt(pkg) => {
                 self.nav_pvt_state = NavPvtState {
                     time_tag: (pkg.itow() / 1000) as f64,
-                    ..Default::default()
+                    ..NavPvtState::new()
                 };
 
                 self.nav_pvt_state.flags2 = pkg.flags2();

@@ -11,17 +11,15 @@ use ublox::{
     OutProtoMask, PacketRef, Parser, UartMode,
 };
 
-//TASK FOR EMBASSY
-// static NAV_PTR_STATE: Mutex<Cell<NavPvtState>> = Mutex::new(Cell::new(NavPvtState::new()));
-
 #[embassy_executor::task]
-pub async fn gps_task(uart: UART0<'static>, state: Mutex<Cell<NavPvtState>>) -> ! {
+pub async fn gps_task(uart: UART0<'static>, state: &'static Mutex<Cell<NavPvtState>>) -> ! {
     let mut gps = Gps::new(uart, state).await.unwrap();
     loop {
         let _ = gps.process().await;
     }
 }
 
+#[derive(Clone, Copy)]
 #[allow(dead_code)]
 pub struct NavPvtState {
     pub time_tag: f64,
@@ -49,13 +47,6 @@ pub struct NavPvtState {
     pub satellites_used: u8,
 
     pub position_fix_type: GnssFixType,
-    pub fix_flags: NavPvtFlags,
-    pub invalid_llh: bool,
-    pub position_accuracy: (f64, f64),
-    pub velocity_accuracy: f64,
-    pub heading_accuracy: f64,
-    pub magnetic_declination_accuracy: f64,
-    pub flags2: NavPvtFlags2,
 }
 
 impl NavPvtState {
@@ -83,27 +74,20 @@ impl NavPvtState {
             pdop: f64::NAN,
             satellites_used: 0,
             utc_time_accuracy: 0,
-            invalid_llh: true,
-            position_accuracy: (f64::NAN, f64::NAN),
-            velocity_accuracy: f64::NAN,
-            heading_accuracy: f64::NAN,
-            magnetic_declination_accuracy: f64::NAN,
             position_fix_type: GnssFixType::NoFix,
-            fix_flags: NavPvtFlags::empty(),
-            flags2: NavPvtFlags2::empty(),
         }
     }
 }
 
 struct Gps {
     uart_port: Uart<'static, Async>,
-    nav_pvt_state: Mutex<Cell<NavPvtState>>,
+    nav_pvt_state: &'static Mutex<Cell<NavPvtState>>,
 }
 
 impl Gps {
     pub async fn new(
         uart: UART0<'static>,
-        nav_pvt_state: Mutex<Cell<NavPvtState>>,
+        nav_pvt_state: &'static Mutex<Cell<NavPvtState>>,
     ) -> Result<Self, TxError> {
         let config = uart::Config::default().with_baudrate(115200);
         let mut uart_port = Uart::new(uart, config).unwrap().into_async();
@@ -168,10 +152,6 @@ impl Gps {
         self.uart_port.read_async(output).await
     }
 
-    async fn write_all_uart(&mut self, data: &[u8]) -> Result<usize, TxError> {
-        self.uart_port.write_async(data).await
-    }
-
     fn handle_packet(&mut self, packet: PacketRef<'_>) {
         let parsed = match packet {
             PacketRef::NavPvt(pkg) => {
@@ -179,8 +159,6 @@ impl Gps {
                     time_tag: (pkg.itow() / 1000) as f64,
                     ..NavPvtState::new()
                 };
-
-                nav_pvt_state.flags2 = pkg.flags2();
 
                 if pkg.flags2().contains(NavPvtFlags2::CONFIRMED_AVAI) {
                     nav_pvt_state.day = pkg.day();
@@ -195,7 +173,6 @@ impl Gps {
                 }
 
                 nav_pvt_state.position_fix_type = pkg.fix_type();
-                nav_pvt_state.fix_flags = pkg.flags();
 
                 nav_pvt_state.lat = pkg.latitude();
                 nav_pvt_state.lon = pkg.longitude();
@@ -214,12 +191,6 @@ impl Gps {
 
                 nav_pvt_state.satellites_used = pkg.num_satellites();
 
-                nav_pvt_state.invalid_llh = pkg.flags3().invalid_llh();
-                nav_pvt_state.position_accuracy =
-                    (pkg.horizontal_accuracy(), pkg.vertical_accuracy());
-                nav_pvt_state.velocity_accuracy = pkg.speed_accuracy();
-                nav_pvt_state.heading_accuracy = pkg.heading_accuracy();
-                nav_pvt_state.magnetic_declination_accuracy = pkg.magnetic_declination_accuracy();
                 Some(nav_pvt_state)
             }
             _ => None,

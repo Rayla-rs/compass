@@ -8,17 +8,22 @@
 
 use core::cell::Cell;
 
+use compass::display::display_task;
 use compass::gps::{gps_task, NavPvtState};
 use compass::hmc5883i::{magnetometer_task, MagnetometerState};
 use compass::led_ring::led_ring_task;
 use critical_section::Mutex;
 use embassy_executor::Spawner;
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{self, InputConfig};
+use esp_hal::gpio::{self, InputConfig, RtcPinWithResistors};
 use esp_hal::peripherals::*;
-use esp_hal::rtc_cntl::sleep::GpioWakeupSource;
+use esp_hal::rtc_cntl::sleep::{Ext1WakeupSource, WakeupLevel};
 use esp_hal::rtc_cntl::Rtc;
 use esp_hal::timer::systimer::SystemTimer;
+
+static NAV_PVT_STATE: Mutex<Cell<NavPvtState>> = Mutex::new(Cell::new(NavPvtState::new()));
+static MAGNETOMETER_STATE: Mutex<Cell<MagnetometerState>> =
+    Mutex::new(Cell::new(MagnetometerState::new()));
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -34,50 +39,48 @@ async fn main(spawner: Spawner) -> ! {
     // Board setup
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz); // change to max if can
     let peripherals = esp_hal::init(config);
-
-    // Create States
-    let nav_pvt_state = Mutex::new(Cell::new(NavPvtState::new()));
-    let magnetometer_state = Mutex::new(Cell::new(MagnetometerState::default()));
-
-    // Spawn Tasks
-    spawner.must_spawn(button_deep_sleep_task(peripherals.GPIO4, peripherals.LPWR));
-    spawner.must_spawn(gps_task(peripherals.UART0, nav_pvt_state));
-    spawner.must_spawn(magnetometer_task(peripherals.I2C0, magnetometer_state));
-    spawner.must_spawn(display_task(
-        spi,
-        sck,
-        mosi,
-        miso,
-        rst,
-        cs,
-        dc,
-        nav_pvt_state,
-        magnetometer_state,
-    ));
-    spawner.spawn(led_ring_task(
-        peripherals.RMT,
-        peripherals.GPIO2,
-        nav_pvt_state,
-        magnetometer_state,
-    ));
-
-    // TODO -> battery monitor
     let timer0 = SystemTimer::new(peripherals.SYSTIMER);
     esp_hal_embassy::init(timer0.alarm0);
 
-    app.run().await
-}
+    // Spawn Tasks
+    spawner.must_spawn(button_deep_sleep_task(peripherals.GPIO4, peripherals.LPWR));
+    spawner.must_spawn(gps_task(peripherals.UART0, &NAV_PVT_STATE));
+    spawner.must_spawn(magnetometer_task(peripherals.I2C0, &MAGNETOMETER_STATE));
+    spawner.must_spawn(display_task(
+        peripherals.SPI2,
+        peripherals.GPIO19,
+        peripherals.GPIO18,
+        peripherals.GPIO20,
+        peripherals.GPIO0,
+        peripherals.GPIO1,
+        peripherals.GPIO21,
+        &NAV_PVT_STATE,
+        &MAGNETOMETER_STATE,
+    ));
+    spawner.must_spawn(led_ring_task(
+        peripherals.RMT,
+        peripherals.GPIO2,
+        &NAV_PVT_STATE,
+        &MAGNETOMETER_STATE,
+    ));
 
-//(radians /pi*8)%16
-// Sleeper
+    loop {}
+}
 
 /// Task that awaits button press to shutdown the esp
 #[embassy_executor::task]
-async fn button_deep_sleep_task(pin: GPIO4<'static>, lpwr: LPWR<'static>) -> ! {
+async fn button_deep_sleep_task(mut pin: GPIO4<'static>, lpwr: LPWR<'static>) -> ! {
     let mut rtc = Rtc::new(lpwr);
 
-    let mut button = gpio::Input::new(pin, InputConfig::default().with_pull(gpio::Pull::Down));
+    let mut button = gpio::Input::new(
+        pin.reborrow(),
+        InputConfig::default().with_pull(gpio::Pull::Down),
+    );
     button.wait_for_falling_edge().await;
+    core::mem::drop(button);
 
-    rtc.sleep_deep(&[&GpioWakeupSource::new()])
+    let wakeup_pins: &mut [(&mut dyn RtcPinWithResistors, WakeupLevel)] =
+        &mut [(&mut pin, WakeupLevel::Low)];
+    let ext1 = Ext1WakeupSource::new(wakeup_pins);
+    rtc.sleep_deep(&[&ext1]);
 }

@@ -21,4 +21,12 @@ TODO
 1x Push Button
 1x GPS+Compass Module
 1x Ssd3106 spi display
-1x LED Ring (driver=...)
+1x 16 pixel Ws2812 led ring
+
+## Features
+Deep sleep and wakeup via push button.
+Gps NavPvt packet receiving and parsing.
+Hmc5883I (Magnetometer) reading and processing.
+
+## Future Features
+Batery Monitor

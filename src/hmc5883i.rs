@@ -9,7 +9,10 @@ use esp_hal::{
 };
 
 #[embassy_executor::task]
-pub async fn magnetometer_task(i2c: I2C0<'static>, state: Mutex<Cell<MagnetometerState>>) -> ! {
+pub async fn magnetometer_task(
+    i2c: I2C0<'static>,
+    state: &'static Mutex<Cell<MagnetometerState>>,
+) -> ! {
     let mut hmc5883i = Hmc5883I::new(i2c, state);
     let mut ticker = Ticker::every(Duration::from_millis(50));
 
@@ -19,6 +22,7 @@ pub async fn magnetometer_task(i2c: I2C0<'static>, state: Mutex<Cell<Magnetomete
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct MagnetometerState {
     x_guass: f32,
     y_guass: f32,
@@ -27,28 +31,31 @@ pub struct MagnetometerState {
 
 impl Default for MagnetometerState {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MagnetometerState {
+    pub const fn new() -> Self {
         Self {
             x_guass: f32::NAN,
             y_guass: f32::NAN,
             z_guass: f32::NAN,
         }
     }
-}
-
-impl MagnetometerState {
     /// Calculates heading in radians
-    fn heading(&mut self) -> f32 {
+    fn _heading(&mut self) -> f32 {
         micromath::F32::atan2(self.y_guass.into(), self.x_guass.into()).into()
     }
 }
 
 struct Hmc5883I {
     i2c_port: I2c<'static, Async>,
-    state: Mutex<Cell<MagnetometerState>>,
+    state: &'static Mutex<Cell<MagnetometerState>>,
 }
 
 impl Hmc5883I {
-    fn new(i2c: I2C0<'static>, state: Mutex<Cell<MagnetometerState>>) -> Self {
+    fn new(i2c: I2C0<'static>, state: &'static Mutex<Cell<MagnetometerState>>) -> Self {
         let config = Config::default();
         let i2c_port = I2c::new(i2c, config).unwrap().into_async();
 

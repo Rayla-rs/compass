@@ -1,3 +1,4 @@
+use arrform::{arrform, ArrForm};
 use core::cell::Cell;
 use critical_section::Mutex;
 use embassy_time::{Duration, Ticker};
@@ -30,19 +31,38 @@ pub async fn display_task(
     cs: GPIO1<'static>,
     dc: GPIO21<'static>,
 
-    nav_pvt_state: Mutex<Cell<NavPvtState>>,
-    magnetometer_state: Mutex<Cell<MagnetometerState>>,
+    nav_pvt_state: &'static Mutex<Cell<NavPvtState>>,
+    magnetometer_state: &'static Mutex<Cell<MagnetometerState>>,
 ) -> ! {
     let mut display = Display::new(spi, sck, mosi, miso, rst, cs, dc).await;
     let mut ticker = Ticker::every(Duration::from_millis(50));
 
     loop {
-        // TODO
-        // Construct update args in critical section
+        let argument = critical_section::with(|cs| {
+            let nav_pvt_state = nav_pvt_state.borrow(cs).get();
+            let _magnetometer_state = magnetometer_state.borrow(cs).get();
 
-        display.process();
+            let header = arrform!(
+                64,
+                "T:{}{}{} Sats:{}\nLat:{}\nLon:{}",
+                nav_pvt_state.hour,
+                nav_pvt_state.min,
+                nav_pvt_state.sec,
+                nav_pvt_state.satellites_used,
+                nav_pvt_state.lat,
+                nav_pvt_state.lon
+            );
+
+            DisplayArgument { header }
+        });
+
+        display.process(argument);
         ticker.next().await;
     }
+}
+
+struct DisplayArgument {
+    header: ArrForm<64>,
 }
 
 struct Display {
@@ -105,19 +125,19 @@ impl Display {
         Self { display_driver }
     }
 
-    fn process(&mut self) {
+    fn process(&mut self, arg: DisplayArgument) {
         let text_style = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
             .text_color(BinaryColor::On)
             .build();
 
-        let style = PrimitiveStyleBuilder::new()
+        let _style = PrimitiveStyleBuilder::new()
             .stroke_width(1)
             .stroke_color(BinaryColor::On)
             .build();
 
         Text::with_baseline(
-            "Hello World",
+            arg.header.as_str(),
             Point::default(),
             text_style,
             embedded_graphics::text::Baseline::Top,

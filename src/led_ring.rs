@@ -1,11 +1,15 @@
 use core::cell::Cell;
+use core::f32::consts::PI;
 
 use blinksy::color::{ColorCorrection, Hsv, HsvHueRainbow};
 use blinksy::drivers::ws2812::Ws2812Led;
 use blinksy::layout::Layout1d;
 use blinksy_esp::rmt::ClocklessRmtDriver;
+
 use critical_section::Mutex;
+
 use embassy_time::{Duration, Ticker};
+
 use esp_hal::peripherals::*;
 use esp_hal::rmt::{ConstChannelAccess, Rmt, Tx};
 use esp_hal::time::Rate;
@@ -17,24 +21,38 @@ use crate::hmc5883i::MagnetometerState;
 pub async fn led_ring_task(
     rmt: esp_hal::peripherals::RMT<'static>,
     data_pin: GPIO2<'static>,
-    _nav_pvt_state: Mutex<Cell<NavPvtState>>,
-    _magnetometer_state: Mutex<Cell<MagnetometerState>>,
+    _nav_pvt_state: &'static Mutex<Cell<NavPvtState>>,
+    _magnetometer_state: &'static Mutex<Cell<MagnetometerState>>,
 ) -> ! {
     let mut ring = LEDRing::new(rmt, data_pin);
     let mut ticker = Ticker::every(Duration::from_millis(200));
 
     loop {
-        // TODO
-        // Create update args in critical section
+        // UNFINISHED
+        let arg = critical_section::with(|_cs| {
+            //
+            ProcessArgument::NotReady
+        });
 
-        ring.process();
+        ring.process(arg);
         ticker.next().await;
     }
+}
+
+enum ProcessArgument {
+    WithNorth(usize),
+    WithNorthAndTarget(usize, usize),
+    NotReady,
 }
 
 blinksy::layout1d!(RingLayout, 16);
 
 const BUFFER_SIZE: usize = RingLayout::PIXEL_COUNT * 3 * 8 + 1;
+
+fn radians_to_pixel(rad: f32) -> usize {
+    Into::<f32>::into(micromath::F32(rad / PI * 8.).round()) as usize % RingLayout::PIXEL_COUNT
+}
+
 struct LEDRing {
     driver: ClocklessRmtDriver<Ws2812Led, ConstChannelAccess<Tx, 0>, BUFFER_SIZE>,
 }
@@ -52,7 +70,7 @@ impl LEDRing {
         Self { driver }
     }
 
-    fn process(&mut self) {
+    fn process(&mut self, _arg: ProcessArgument) {
         self.driver
             .write_pixels(
                 RingLayout::points()

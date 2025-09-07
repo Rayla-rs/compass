@@ -24,6 +24,7 @@ blinksy-esp = { version = "0.8.0", features = ["esp32c6"] }
 ssd1306 = { version = "0.10.0" , features = ["async"] }
 embedded-graphics = "0.8.1"
 embedded-hal-bus = { version = "0.3.0", features = ["async"] }
+arrform = "0.1.1"
 
 [profile.dev]
 # Rust debug is too slow.

@@ -14,11 +14,13 @@ use ublox::{
 //TASK FOR EMBASSY
 // static NAV_PTR_STATE: Mutex<Cell<NavPvtState>> = Mutex::new(Cell::new(NavPvtState::new()));
 
-// #[embassy_executor::task]
-// pub async fn gps_task(uart: UART0<'static>) {
-//     let gps = Gps::new(uart);
-//     gps.await.unwrap();
-// }
+#[embassy_executor::task]
+pub async fn gps_task(uart: UART0<'static>, state: Mutex<Cell<NavPvtState>>) -> ! {
+    let mut gps = Gps::new(uart, state).await.unwrap();
+    loop {
+        let _ = gps.process().await;
+    }
+}
 
 #[allow(dead_code)]
 pub struct NavPvtState {
@@ -93,13 +95,16 @@ impl NavPvtState {
     }
 }
 
-pub struct Gps {
+struct Gps {
     uart_port: Uart<'static, Async>,
-    nav_pvt_state: NavPvtState,
+    nav_pvt_state: Mutex<Cell<NavPvtState>>,
 }
 
 impl Gps {
-    pub async fn new(uart: UART0<'static>) -> Result<Self, TxError> {
+    pub async fn new(
+        uart: UART0<'static>,
+        nav_pvt_state: Mutex<Cell<NavPvtState>>,
+    ) -> Result<Self, TxError> {
         let config = uart::Config::default().with_baudrate(115200);
         let mut uart_port = Uart::new(uart, config).unwrap().into_async();
 
@@ -127,11 +132,11 @@ impl Gps {
 
         Ok(Self {
             uart_port,
-            nav_pvt_state: NavPvtState::new(),
+            nav_pvt_state,
         })
     }
 
-    pub async fn process(&mut self) -> Result<(), RxError> {
+    async fn process(&mut self) -> Result<(), RxError> {
         const MAX_PAYLOAD_LEN: usize = 1240;
 
         let mut buf = [0u8; MAX_PAYLOAD_LEN];
@@ -168,56 +173,62 @@ impl Gps {
     }
 
     fn handle_packet(&mut self, packet: PacketRef<'_>) {
-        match packet {
+        let parsed = match packet {
             PacketRef::NavPvt(pkg) => {
-                self.nav_pvt_state = NavPvtState {
+                let mut nav_pvt_state = NavPvtState {
                     time_tag: (pkg.itow() / 1000) as f64,
                     ..NavPvtState::new()
                 };
 
-                self.nav_pvt_state.flags2 = pkg.flags2();
+                nav_pvt_state.flags2 = pkg.flags2();
 
                 if pkg.flags2().contains(NavPvtFlags2::CONFIRMED_AVAI) {
-                    self.nav_pvt_state.day = pkg.day();
-                    self.nav_pvt_state.month = pkg.month();
-                    self.nav_pvt_state.year = pkg.year();
-                    self.nav_pvt_state.hour = pkg.hour();
-                    self.nav_pvt_state.min = pkg.min();
-                    self.nav_pvt_state.sec = pkg.sec();
-                    self.nav_pvt_state.nanosecond = pkg.nanosec();
+                    nav_pvt_state.day = pkg.day();
+                    nav_pvt_state.month = pkg.month();
+                    nav_pvt_state.year = pkg.year();
+                    nav_pvt_state.hour = pkg.hour();
+                    nav_pvt_state.min = pkg.min();
+                    nav_pvt_state.sec = pkg.sec();
+                    nav_pvt_state.nanosecond = pkg.nanosec();
 
-                    self.nav_pvt_state.utc_time_accuracy = pkg.time_accuracy();
+                    nav_pvt_state.utc_time_accuracy = pkg.time_accuracy();
                 }
 
-                self.nav_pvt_state.position_fix_type = pkg.fix_type();
-                self.nav_pvt_state.fix_flags = pkg.flags();
+                nav_pvt_state.position_fix_type = pkg.fix_type();
+                nav_pvt_state.fix_flags = pkg.flags();
 
-                self.nav_pvt_state.lat = pkg.latitude();
-                self.nav_pvt_state.lon = pkg.longitude();
-                self.nav_pvt_state.height = pkg.height_above_ellipsoid();
-                self.nav_pvt_state.msl = pkg.height_msl();
+                nav_pvt_state.lat = pkg.latitude();
+                nav_pvt_state.lon = pkg.longitude();
+                nav_pvt_state.height = pkg.height_above_ellipsoid();
+                nav_pvt_state.msl = pkg.height_msl();
 
-                self.nav_pvt_state.vel_ned = (pkg.vel_north(), pkg.vel_east(), pkg.vel_down());
+                nav_pvt_state.vel_ned = (pkg.vel_north(), pkg.vel_east(), pkg.vel_down());
 
-                self.nav_pvt_state.speed_over_ground = pkg.ground_speed_2d();
-                self.nav_pvt_state.heading_motion = pkg.heading_motion();
-                self.nav_pvt_state.heading_vehicle = pkg.heading_vehicle();
+                nav_pvt_state.speed_over_ground = pkg.ground_speed_2d();
+                nav_pvt_state.heading_motion = pkg.heading_motion();
+                nav_pvt_state.heading_vehicle = pkg.heading_vehicle();
 
-                self.nav_pvt_state.magnetic_declination = pkg.magnetic_declination();
+                nav_pvt_state.magnetic_declination = pkg.magnetic_declination();
 
-                self.nav_pvt_state.pdop = pkg.pdop();
+                nav_pvt_state.pdop = pkg.pdop();
 
-                self.nav_pvt_state.satellites_used = pkg.num_satellites();
+                nav_pvt_state.satellites_used = pkg.num_satellites();
 
-                self.nav_pvt_state.invalid_llh = pkg.flags3().invalid_llh();
-                self.nav_pvt_state.position_accuracy =
+                nav_pvt_state.invalid_llh = pkg.flags3().invalid_llh();
+                nav_pvt_state.position_accuracy =
                     (pkg.horizontal_accuracy(), pkg.vertical_accuracy());
-                self.nav_pvt_state.velocity_accuracy = pkg.speed_accuracy();
-                self.nav_pvt_state.heading_accuracy = pkg.heading_accuracy();
-                self.nav_pvt_state.magnetic_declination_accuracy =
-                    pkg.magnetic_declination_accuracy();
+                nav_pvt_state.velocity_accuracy = pkg.speed_accuracy();
+                nav_pvt_state.heading_accuracy = pkg.heading_accuracy();
+                nav_pvt_state.magnetic_declination_accuracy = pkg.magnetic_declination_accuracy();
+                Some(nav_pvt_state)
             }
-            _ => {}
+            _ => None,
+        };
+
+        if let Some(parsed) = parsed {
+            critical_section::with(|cs| {
+                self.nav_pvt_state.borrow(cs).set(parsed);
+            })
         }
     }
 }

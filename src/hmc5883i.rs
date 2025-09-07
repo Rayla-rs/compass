@@ -1,35 +1,67 @@
+use core::cell::Cell;
+
+use critical_section::Mutex;
+use embassy_time::{Duration, Ticker};
 use esp_hal::{
     i2c::master::{Config, Error, I2c},
     peripherals::*,
     Async,
 };
 
-pub struct Hmc5883I {
-    i2c_port: I2c<'static, Async>,
+#[embassy_executor::task]
+pub async fn magnetometer_task(i2c: I2C0<'static>, state: Mutex<Cell<MagnetometerState>>) -> ! {
+    let mut hmc5883i = Hmc5883I::new(i2c, state);
+    let mut ticker = Ticker::every(Duration::from_millis(50));
+
+    loop {
+        hmc5883i.process().await;
+        ticker.next().await;
+    }
+}
+
+pub struct MagnetometerState {
     x_guass: f32,
     y_guass: f32,
     z_guass: f32,
 }
 
-impl Hmc5883I {
-    pub fn new(i2c: I2C0<'static>) -> Self {
-        let config = Config::default();
-        let i2c_port = I2c::new(i2c, config).unwrap().into_async();
-
+impl Default for MagnetometerState {
+    fn default() -> Self {
         Self {
-            i2c_port,
             x_guass: f32::NAN,
             y_guass: f32::NAN,
             z_guass: f32::NAN,
         }
     }
+}
 
+impl MagnetometerState {
     /// Calculates heading in radians
     fn heading(&mut self) -> f32 {
         micromath::F32::atan2(self.y_guass.into(), self.x_guass.into()).into()
     }
+}
 
-    pub async fn process(&mut self) -> Result<(), Error> {
+struct Hmc5883I {
+    i2c_port: I2c<'static, Async>,
+    state: Mutex<Cell<MagnetometerState>>,
+}
+
+impl Hmc5883I {
+    fn new(i2c: I2C0<'static>, state: Mutex<Cell<MagnetometerState>>) -> Self {
+        let config = Config::default();
+        let i2c_port = I2c::new(i2c, config).unwrap().into_async();
+
+        Self { i2c_port, state }
+    }
+
+    async fn process(&mut self) {
+        let result = self.process_inner().await;
+
+        critical_section::with(|cs| self.state.borrow(cs).set(result.unwrap_or_default()));
+    }
+
+    async fn process_inner(&mut self) -> Result<MagnetometerState, Error> {
         let mut buf = [0u8; 6];
         let mut gain = [0u8; 1];
 
@@ -60,16 +92,10 @@ impl Hmc5883I {
             ((buf[2] as i16) << 8) | buf[3] as i16,
         ];
 
-        self.x_guass = (raw[0] as f32) * resolution;
-        self.y_guass = (raw[1] as f32) * resolution;
-        self.z_guass = (raw[2] as f32) * resolution;
-
-        Ok(())
-    }
-
-    pub fn clear(&mut self) {
-        self.x_guass = f32::NAN;
-        self.y_guass = f32::NAN;
-        self.z_guass = f32::NAN;
+        Ok(MagnetometerState {
+            x_guass: (raw[0] as f32) * resolution,
+            y_guass: (raw[1] as f32) * resolution,
+            z_guass: (raw[2] as f32) * resolution,
+        })
     }
 }

@@ -59,7 +59,7 @@ pub struct NavPvtState {
 }
 
 impl NavPvtState {
-    const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             time_tag: f64::NAN,
             year: 0,

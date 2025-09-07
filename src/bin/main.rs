@@ -6,11 +6,12 @@
     holding buffers for the duration of a data transfer."
 )]
 
-use compass::app::App;
-use compass::display::Display;
-use compass::gps::Gps;
-use compass::hmc5883i::Hmc5883I;
-use compass::led_ring::LEDRing;
+use core::cell::Cell;
+
+use compass::gps::{gps_task, NavPvtState};
+use compass::hmc5883i::{magnetometer_task, MagnetometerState};
+use compass::led_ring::led_ring_task;
+use critical_section::Mutex;
 use embassy_executor::Spawner;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{self, InputConfig};
@@ -30,26 +31,35 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
+    // Board setup
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz); // change to max if can
     let peripherals = esp_hal::init(config);
 
-    spawner.must_spawn(button_deep_sleep_task(peripherals.GPIO4, peripherals.LPWR));
+    // Create States
+    let nav_pvt_state = Mutex::new(Cell::new(NavPvtState::new()));
+    let magnetometer_state = Mutex::new(Cell::new(MagnetometerState::default()));
 
-    let app = App::new(
-        Gps::new(peripherals.UART0).await.unwrap(),
-        Hmc5883I::new(peripherals.I2C0),
-        Display::new(
-            peripherals.SPI2,
-            peripherals.GPIO19,
-            peripherals.GPIO18,
-            peripherals.GPIO20,
-            peripherals.GPIO0,
-            peripherals.GPIO1,
-            peripherals.GPIO21,
-        )
-        .await,
-        LEDRing::new(peripherals.RMT, peripherals.GPIO2),
-    );
+    // Spawn Tasks
+    spawner.must_spawn(button_deep_sleep_task(peripherals.GPIO4, peripherals.LPWR));
+    spawner.must_spawn(gps_task(peripherals.UART0, nav_pvt_state));
+    spawner.must_spawn(magnetometer_task(peripherals.I2C0, magnetometer_state));
+    spawner.must_spawn(display_task(
+        spi,
+        sck,
+        mosi,
+        miso,
+        rst,
+        cs,
+        dc,
+        nav_pvt_state,
+        magnetometer_state,
+    ));
+    spawner.spawn(led_ring_task(
+        peripherals.RMT,
+        peripherals.GPIO2,
+        nav_pvt_state,
+        magnetometer_state,
+    ));
 
     // TODO -> battery monitor
     let timer0 = SystemTimer::new(peripherals.SYSTIMER);
@@ -57,10 +67,6 @@ async fn main(spawner: Spawner) -> ! {
 
     app.run().await
 }
-
-// struct Bat<T: AnalogPin> {
-//     pin: T,
-// }
 
 //(radians /pi*8)%16
 // Sleeper

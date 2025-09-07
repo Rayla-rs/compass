@@ -1,3 +1,6 @@
+use core::cell::Cell;
+use critical_section::Mutex;
+use embassy_time::{Duration, Ticker};
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -13,7 +16,36 @@ use ssd1306::mode::BufferedGraphicsModeAsync;
 use ssd1306::prelude::*;
 use ssd1306::Ssd1306Async;
 
-pub struct Display {
+use crate::gps::NavPvtState;
+use crate::hmc5883i::MagnetometerState;
+
+#[embassy_executor::task]
+pub async fn display_task(
+    spi: SPI2<'static>,
+    sck: GPIO19<'static>,
+    mosi: GPIO18<'static>,
+    miso: GPIO20<'static>,
+
+    rst: GPIO0<'static>,
+    cs: GPIO1<'static>,
+    dc: GPIO21<'static>,
+
+    nav_pvt_state: Mutex<Cell<NavPvtState>>,
+    magnetometer_state: Mutex<Cell<MagnetometerState>>,
+) -> ! {
+    let mut display = Display::new(spi, sck, mosi, miso, rst, cs, dc).await;
+    let mut ticker = Ticker::every(Duration::from_millis(50));
+
+    loop {
+        // TODO
+        // Construct update args in critical section
+
+        display.process();
+        ticker.next().await;
+    }
+}
+
+struct Display {
     display_driver: Ssd1306Async<
         SPIInterface<
             ExclusiveDevice<Spi<'static, Async>, Output<'static>, NoDelay>,
@@ -25,7 +57,7 @@ pub struct Display {
 }
 
 impl Display {
-    pub async fn new(
+    async fn new(
         spi: SPI2<'static>,
         sck: GPIO19<'static>,
         mosi: GPIO18<'static>,
@@ -73,7 +105,7 @@ impl Display {
         Self { display_driver }
     }
 
-    fn draw(&mut self) {
+    fn process(&mut self) {
         let text_style = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
             .text_color(BinaryColor::On)

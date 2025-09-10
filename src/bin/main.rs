@@ -13,13 +13,16 @@ use compass::gps::{gps_task, NavPvtState};
 use compass::hmc5883i::{magnetometer_task, MagnetometerState};
 use compass::led_ring::led_ring_task;
 use critical_section::Mutex;
+use defmt_rtt as _;
 use embassy_executor::Spawner;
+use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{self, InputConfig, RtcPinWithResistors};
 use esp_hal::peripherals::*;
 use esp_hal::rtc_cntl::sleep::{Ext1WakeupSource, WakeupLevel};
 use esp_hal::rtc_cntl::Rtc;
 use esp_hal::timer::systimer::SystemTimer;
+use log::info;
 
 static NAV_PVT_STATE: Mutex<Cell<NavPvtState>> = Mutex::new(Cell::new(NavPvtState::new()));
 static MAGNETOMETER_STATE: Mutex<Cell<MagnetometerState>> =
@@ -64,7 +67,10 @@ async fn main(spawner: Spawner) -> ! {
         &MAGNETOMETER_STATE,
     ));
 
-    loop {}
+    loop {
+        info!("Hello World");
+        Timer::after(Duration::from_secs(1)).await;
+    }
 }
 
 /// Task that awaits button press to shutdown the esp

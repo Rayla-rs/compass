@@ -7,7 +7,7 @@ use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::Point;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::PrimitiveStyleBuilder;
+use embedded_graphics::primitives::{PrimitiveStyleBuilder, StyledDrawable, Triangle};
 use embedded_graphics::text::Text;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use esp_hal::gpio::{Level, Output, OutputConfig};
@@ -56,7 +56,7 @@ pub async fn display_task(
             DisplayArgument { header }
         });
 
-        display.process(argument);
+        display.process(argument).await;
         ticker.next().await;
     }
 }
@@ -96,12 +96,12 @@ impl Display {
 
         let spi = Spi::new(
             spi,
-            esp_hal::spi::master::Config::default().with_frequency(Rate::from_mhz(80)),
+            esp_hal::spi::master::Config::default().with_frequency(Rate::from_mhz(40)),
         )
         .unwrap()
         .with_sck(sck)
         .with_mosi(mosi)
-        .with_miso(miso)
+        // .with_miso(miso)
         .into_async();
 
         // Setup device
@@ -125,16 +125,20 @@ impl Display {
         Self { display_driver }
     }
 
-    fn process(&mut self, arg: DisplayArgument) {
+    async fn process(&mut self, arg: DisplayArgument) {
         let text_style = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
             .text_color(BinaryColor::On)
             .build();
 
-        let _style = PrimitiveStyleBuilder::new()
-            .stroke_width(1)
-            .stroke_color(BinaryColor::On)
-            .build();
+        // let style = PrimitiveStyleBuilder::new()
+        //     .stroke_width(1)
+        //     .stroke_color(BinaryColor::On)
+        //     .build();
+
+        // Triangle::new(Point::new(0, 0), Point::new(5, 5), Point::new(4, 16))
+        //     .draw_styled(&style, &mut self.display_driver)
+        //     .unwrap();
 
         Text::with_baseline(
             arg.header.as_str(),
@@ -144,5 +148,6 @@ impl Display {
         )
         .draw(&mut self.display_driver)
         .unwrap();
+        self.display_driver.flush().await.unwrap();
     }
 }

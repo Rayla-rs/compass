@@ -1,21 +1,38 @@
 use core::cell::Cell;
 
 use critical_section::Mutex;
+use embassy_time::{Duration, Ticker};
 use esp_hal::{
     peripherals::*,
     uart::{self, RxError, TxError, Uart},
     Async,
 };
+use esp_println::println;
+use geoconv::{Degrees, Lle, Meters, Wgs84};
 use ublox::{
-    CfgPrtUartBuilder, FixedLinearBuffer, GnssFixType, InProtoMask, NavPvtFlags, NavPvtFlags2,
-    OutProtoMask, PacketRef, Parser, UartMode,
+    CfgPrtUartBuilder, FixedLinearBuffer, GnssFixType, InProtoMask, NavPvtFlags2, OutProtoMask,
+    PacketRef, Parser, UartMode,
 };
 
 #[embassy_executor::task]
-pub async fn gps_task(uart: UART0<'static>, state: &'static Mutex<Cell<NavPvtState>>) -> ! {
-    let mut gps = Gps::new(uart, state).await.unwrap();
+pub async fn gps_task(
+    uart: UART1<'static>,
+    rx: GPIO17<'static>,
+    tx: GPIO16<'static>,
+    state: &'static Mutex<Cell<NavPvtState>>,
+) -> ! {
+    println!("Started Gps Task");
+
+    let mut gps = Gps::new(uart, rx, tx, state).await.unwrap();
+    println!("Gps Ready!");
+
+    // let mut ticker = Ticker::every(Duration::from_millis(100));
+
     loop {
-        let _ = gps.process().await;
+        if let Err(err) = gps.process().await {
+            println!("GPS RX Err:{}", err)
+        }
+        // ticker.next().await;
     }
 }
 
@@ -33,9 +50,9 @@ pub struct NavPvtState {
     pub time_accuracy: u32,
     pub nanosecond: i32,
     pub utc_time_accuracy: u32,
-    pub lat: f64,
-    pub lon: f64,
-    pub height: f64,
+    /// Latitude, Longitude, Elevation
+    pub lle: Option<Lle<Wgs84, Degrees>>,
+
     pub msl: f64,
     pub vel_ned: (f64, f64, f64),
     pub speed_over_ground: f64,
@@ -62,9 +79,7 @@ impl NavPvtState {
             valid: 0,
             time_accuracy: 0,
             nanosecond: 0,
-            lat: f64::NAN,
-            lon: f64::NAN,
-            height: f64::NAN,
+            lle: None,
             msl: f64::NAN,
             vel_ned: (f64::NAN, f64::NAN, f64::NAN),
             speed_over_ground: f64::NAN,
@@ -86,16 +101,22 @@ struct Gps {
 
 impl Gps {
     pub async fn new(
-        uart: UART0<'static>,
+        uart: UART1<'static>,
+        rx: GPIO17<'static>,
+        tx: GPIO16<'static>,
         nav_pvt_state: &'static Mutex<Cell<NavPvtState>>,
     ) -> Result<Self, TxError> {
         let config = uart::Config::default().with_baudrate(115200);
-        let mut uart_port = Uart::new(uart, config).unwrap().into_async();
+        let mut uart_port = Uart::new(uart, config)
+            .unwrap()
+            .with_rx(rx)
+            .with_tx(tx)
+            .into_async();
 
         uart_port
             .write_async(
                 CfgPrtUartBuilder {
-                    portid: ublox::UartPortId::Uart1,
+                    portid: ublox::UartPortId::Usb, // Double check this is not supposed to be Uart1
                     reserved0: 0,
                     tx_ready: 0,
                     mode: UartMode::new(
@@ -121,7 +142,7 @@ impl Gps {
     }
 
     async fn process(&mut self) -> Result<(), RxError> {
-        const MAX_PAYLOAD_LEN: usize = 1240;
+        const MAX_PAYLOAD_LEN: usize = 1280;
 
         let mut buf = [0u8; MAX_PAYLOAD_LEN];
         let mut parser = Parser::new(FixedLinearBuffer::new(&mut buf));
@@ -130,13 +151,14 @@ impl Gps {
         let nbytes = self.read_uart(&mut local_buf).await?;
 
         let mut it = parser.consume_ubx(&local_buf[..nbytes]);
+
         loop {
             match it.next() {
                 Some(Ok(packet)) => {
                     self.handle_packet(packet);
                 }
-                Some(Err(_)) => {
-                    // bad packet
+                Some(Err(err)) => {
+                    println!("Bad Packet! Err:{}", err);
                 }
                 None => {
                     // debug!("Parsed all data in buffer ...");
@@ -153,6 +175,8 @@ impl Gps {
     }
 
     fn handle_packet(&mut self, packet: PacketRef<'_>) {
+        println!("Handle Packet:{:?}", packet);
+
         let parsed = match packet {
             PacketRef::NavPvt(pkg) => {
                 let mut nav_pvt_state = NavPvtState {
@@ -174,9 +198,14 @@ impl Gps {
 
                 nav_pvt_state.position_fix_type = pkg.fix_type();
 
-                nav_pvt_state.lat = pkg.latitude();
-                nav_pvt_state.lon = pkg.longitude();
-                nav_pvt_state.height = pkg.height_above_ellipsoid();
+                nav_pvt_state.lle = Some(Lle::new(
+                    Degrees::new(pkg.latitude()),
+                    Degrees::new(pkg.longitude()),
+                    Meters::new(pkg.height_above_ellipsoid()),
+                ));
+                //nav_pvt_state.lat = pkg.latitude();
+                //nav_pvt_state.lon = pkg.longitude();
+                //nav_pvt_state.height = pkg.height_above_ellipsoid();
                 nav_pvt_state.msl = pkg.height_msl();
 
                 nav_pvt_state.vel_ned = (pkg.vel_north(), pkg.vel_east(), pkg.vel_down());

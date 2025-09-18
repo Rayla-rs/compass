@@ -2,23 +2,25 @@ use arrform::{arrform, ArrForm};
 use core::cell::Cell;
 use critical_section::Mutex;
 use embassy_time::{Duration, Ticker};
-use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::iso_8859_1::FONT_7X14;
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::Point;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyleBuilder, StyledDrawable, Triangle};
 use embedded_graphics::text::Text;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
+use esp_hal::delay::Delay;
 use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_hal::{gpio, peripherals::*, Async};
 use esp_hal::{spi::master::Spi, time::Rate};
+use esp_println::println;
+use pcd8544_hal::{Pcd8544, Pcd8544Spi};
 use ssd1306::mode::BufferedGraphicsModeAsync;
 use ssd1306::prelude::*;
 use ssd1306::Ssd1306Async;
 
+use crate::compass::CompassState;
 use crate::gps::NavPvtState;
-use crate::hmc5883i::MagnetometerState;
 
 #[embassy_executor::task]
 pub async fn display_task(
@@ -32,31 +34,60 @@ pub async fn display_task(
     dc: GPIO21<'static>,
 
     nav_pvt_state: &'static Mutex<Cell<NavPvtState>>,
-    magnetometer_state: &'static Mutex<Cell<MagnetometerState>>,
+    compass_state: &'static Mutex<Cell<CompassState>>,
 ) -> ! {
-    let mut display = Display::new(spi, sck, mosi, miso, rst, cs, dc).await;
-    let mut ticker = Ticker::every(Duration::from_millis(50));
+    println!("Display Task Initialized");
+
+    // let mut display = Display::new(spi, sck, mosi, miso, rst, cs, dc).await;
+    let mut ticker = Ticker::every(Duration::from_millis(200));
+
+    // pcd8544::PCD8544::new(sck, mosi, dc, cs, rst, light)
+    // Spi Lcd
+    let mut rst_pin = gpio::Output::new(rst, Level::Low, OutputConfig::default());
+    let cs_pin = gpio::Output::new(cs, Level::Low, OutputConfig::default());
+    let dc_pin = gpio::Output::new(dc, Level::Low, OutputConfig::default());
+
+    // Setup driver
+
+    let spi = Spi::new(
+        spi,
+        esp_hal::spi::master::Config::default().with_frequency(Rate::from_mhz(40)),
+    )
+    .unwrap()
+    .with_sck(sck)
+    .with_mosi(mosi)
+    // .with_miso(miso)
+    .into_async();
+
+    let mut delay = Delay::new();
+    let mut display = Pcd8544Spi::new(spi, dc_pin, cs_pin, Some(&mut rst_pin), &mut delay);
+    display.draw_buffer(include_bytes!("../../Downloads/logo.bin"));
 
     loop {
-        let argument = critical_section::with(|cs| {
+        // let argument =
+        critical_section::with(|cs| {
             let nav_pvt_state = nav_pvt_state.borrow(cs).get();
-            let _magnetometer_state = magnetometer_state.borrow(cs).get();
+            let _compass_state = compass_state.borrow(cs).get();
 
-            let header = arrform!(
-                64,
-                "T:{}{}{} Sats:{}\nLat:{}\nLon:{}",
-                nav_pvt_state.hour,
-                nav_pvt_state.min,
-                nav_pvt_state.sec,
-                nav_pvt_state.satellites_used,
-                nav_pvt_state.lat,
-                nav_pvt_state.lon
-            );
+            if let Some(lle) = nav_pvt_state.lle {
+                let lat_lon = (lle.latitude, lle.longitude);
+                // println!("Distance:{:?}", Welly.distance_from(lat_lon));
+            }
 
-            DisplayArgument { header }
+            // let header = arrform!(
+            //     64,
+            //     "T:{}{}{} Sats:{}\nLle:{:?}",
+            //     nav_pvt_state.hour,
+            //     nav_pvt_state.min,
+            //     nav_pvt_state.sec,
+            //     nav_pvt_state.satellites_used,
+            //     nav_pvt_state.lle
+            // );
+
+            // DisplayArgument { header }
         });
 
-        display.process(argument).await;
+        // display.process(argument).await;
         ticker.next().await;
     }
 }
@@ -81,7 +112,7 @@ impl Display {
         spi: SPI2<'static>,
         sck: GPIO19<'static>,
         mosi: GPIO18<'static>,
-        miso: GPIO20<'static>,
+        _miso: GPIO20<'static>,
 
         rst: GPIO0<'static>,
         cs: GPIO1<'static>,
@@ -127,7 +158,7 @@ impl Display {
 
     async fn process(&mut self, arg: DisplayArgument) {
         let text_style = MonoTextStyleBuilder::new()
-            .font(&FONT_6X10)
+            .font(&FONT_7X14)
             .text_color(BinaryColor::On)
             .build();
 
@@ -135,10 +166,6 @@ impl Display {
         //     .stroke_width(1)
         //     .stroke_color(BinaryColor::On)
         //     .build();
-
-        // Triangle::new(Point::new(0, 0), Point::new(5, 5), Point::new(4, 16))
-        //     .draw_styled(&style, &mut self.display_driver)
-        //     .unwrap();
 
         Text::with_baseline(
             arg.header.as_str(),

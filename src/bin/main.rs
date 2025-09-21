@@ -6,11 +6,8 @@
     holding buffers for the duration of a data transfer."
 )]
 
-use compass::compass::{compass_task, CompassState};
+use compass::compass::compass_task;
 use compass::display::display_task;
-use compass::gps::{gps_task, NavPvtState};
-use core::cell::Cell;
-use critical_section::Mutex;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -21,13 +18,6 @@ use esp_hal::rtc_cntl::sleep::{Ext1WakeupSource, WakeupLevel};
 use esp_hal::rtc_cntl::Rtc;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_println::println;
-
-static NAV_PVT_STATE: Mutex<Cell<NavPvtState>> = Mutex::new(Cell::new(NavPvtState::new()));
-static COMPASS_STATE: Mutex<Cell<CompassState>> = Mutex::new(Cell::new(CompassState {
-    temp: 0,
-    mag: (0, 0, 0),
-}));
-// Static for target landmark
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -56,13 +46,11 @@ async fn main(spawner: Spawner) -> ! {
     //     peripherals.UART1,
     //     peripherals.GPIO17,
     //     peripherals.GPIO16,
-    //     &NAV_PVT_STATE,
     // ));
     spawner.must_spawn(compass_task(
         peripherals.I2C0,
         peripherals.GPIO22,
         peripherals.GPIO23,
-        &COMPASS_STATE,
     ));
     spawner.must_spawn(display_task(
         peripherals.SPI2,
@@ -72,17 +60,7 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.GPIO0,
         peripherals.GPIO1,
         peripherals.GPIO21,
-        &NAV_PVT_STATE,
-        &COMPASS_STATE,
     ));
-
-    //// DEPRICATED ////
-    // spawner.must_spawn(led_ring_task(
-    //     peripherals.RMT,
-    //     peripherals.GPIO2,
-    //     &NAV_PVT_STATE,
-    //     &MAGNETOMETER_STATE,
-    // ));
 
     loop {
         Timer::after(Duration::from_millis(50)).await;

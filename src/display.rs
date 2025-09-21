@@ -1,6 +1,4 @@
-use arrform::{arrform, ArrForm};
-use core::cell::Cell;
-use critical_section::Mutex;
+use arrform::ArrForm;
 use embassy_time::{Duration, Ticker};
 use embedded_graphics::mono_font::iso_8859_1::FONT_7X14;
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
@@ -19,8 +17,8 @@ use ssd1306::mode::BufferedGraphicsModeAsync;
 use ssd1306::prelude::*;
 use ssd1306::Ssd1306Async;
 
-use crate::compass::CompassState;
-use crate::gps::NavPvtState;
+use crate::compass::COMPASS_STATE;
+use crate::gps::NAV_PVT_STATE;
 
 #[embassy_executor::task]
 pub async fn display_task(
@@ -32,13 +30,9 @@ pub async fn display_task(
     rst: GPIO0<'static>,
     cs: GPIO1<'static>,
     dc: GPIO21<'static>,
-
-    nav_pvt_state: &'static Mutex<Cell<NavPvtState>>,
-    compass_state: &'static Mutex<Cell<CompassState>>,
 ) -> ! {
     println!("Display Task Initialized");
 
-    // let mut display = Display::new(spi, sck, mosi, miso, rst, cs, dc).await;
     let mut ticker = Ticker::every(Duration::from_millis(200));
 
     // pcd8544::PCD8544::new(sck, mosi, dc, cs, rst, light)
@@ -56,38 +50,25 @@ pub async fn display_task(
     .unwrap()
     .with_sck(sck)
     .with_mosi(mosi)
-    // .with_miso(miso)
+    .with_miso(miso)
     .into_async();
 
     let mut delay = Delay::new();
     let mut display = Pcd8544Spi::new(spi, dc_pin, cs_pin, Some(&mut rst_pin), &mut delay);
-    display.draw_buffer(include_bytes!("../../Downloads/logo.bin"));
+    display.draw_buffer(include_bytes!("./assets/rust_logo.bin"));
+    let v = include_bytes!("./assets/rust_logo.bin");
 
     loop {
         // let argument =
         critical_section::with(|cs| {
-            let nav_pvt_state = nav_pvt_state.borrow(cs).get();
-            let _compass_state = compass_state.borrow(cs).get();
+            let nav_pvt_state = NAV_PVT_STATE.borrow(cs).get();
+            let _compass_state = COMPASS_STATE.borrow(cs).get();
 
             if let Some(lle) = nav_pvt_state.lle {
-                let lat_lon = (lle.latitude, lle.longitude);
+                let _lat_lon = (lle.latitude, lle.longitude);
                 // println!("Distance:{:?}", Welly.distance_from(lat_lon));
             }
-
-            // let header = arrform!(
-            //     64,
-            //     "T:{}{}{} Sats:{}\nLle:{:?}",
-            //     nav_pvt_state.hour,
-            //     nav_pvt_state.min,
-            //     nav_pvt_state.sec,
-            //     nav_pvt_state.satellites_used,
-            //     nav_pvt_state.lle
-            // );
-
-            // DisplayArgument { header }
         });
-
-        // display.process(argument).await;
         ticker.next().await;
     }
 }

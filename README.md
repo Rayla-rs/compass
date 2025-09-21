@@ -16,12 +16,13 @@ Handles updating the display.
 ## GPIO
 TODO
 
+## Assets
+All sprites are stored in the assets folder.
+
 ## Parts Manifest
 1x Esp32c6
 1x Push Button
 1x GPS+Compass Module
-1x Ssd3106 spi display
-1x 16 pixel Ws2812 led ring
 
 ## Features
 Deep sleep and wakeup via push button.

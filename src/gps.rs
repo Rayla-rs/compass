@@ -14,16 +14,13 @@ use ublox::{
     PacketRef, Parser, UartMode,
 };
 
+pub static NAV_PVT_STATE: Mutex<Cell<NavPvtState>> = Mutex::new(Cell::new(NavPvtState::new()));
+
 #[embassy_executor::task]
-pub async fn gps_task(
-    uart: UART1<'static>,
-    rx: GPIO17<'static>,
-    tx: GPIO16<'static>,
-    state: &'static Mutex<Cell<NavPvtState>>,
-) -> ! {
+pub async fn gps_task(uart: UART1<'static>, rx: GPIO17<'static>, tx: GPIO16<'static>) -> ! {
     println!("Started Gps Task");
 
-    let mut gps = Gps::new(uart, rx, tx, state).await.unwrap();
+    let mut gps = Gps::new(uart, rx, tx).await.unwrap();
     println!("Gps Ready!");
 
     // let mut ticker = Ticker::every(Duration::from_millis(100));
@@ -96,7 +93,6 @@ impl NavPvtState {
 
 struct Gps {
     uart_port: Uart<'static, Async>,
-    nav_pvt_state: &'static Mutex<Cell<NavPvtState>>,
 }
 
 impl Gps {
@@ -104,7 +100,6 @@ impl Gps {
         uart: UART1<'static>,
         rx: GPIO17<'static>,
         tx: GPIO16<'static>,
-        nav_pvt_state: &'static Mutex<Cell<NavPvtState>>,
     ) -> Result<Self, TxError> {
         let config = uart::Config::default().with_baudrate(115200);
         let mut uart_port = Uart::new(uart, config)
@@ -135,10 +130,7 @@ impl Gps {
             )
             .await?;
 
-        Ok(Self {
-            uart_port,
-            nav_pvt_state,
-        })
+        Ok(Self { uart_port })
     }
 
     async fn process(&mut self) -> Result<(), RxError> {
@@ -227,7 +219,7 @@ impl Gps {
 
         if let Some(parsed) = parsed {
             critical_section::with(|cs| {
-                self.nav_pvt_state.borrow(cs).set(parsed);
+                NAV_PVT_STATE.borrow(cs).set(parsed);
             })
         }
     }

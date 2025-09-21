@@ -8,7 +8,6 @@ use esp_hal::{
     peripherals::*,
 };
 use esp_println::println;
-use geoconv::{Degrees, Radians};
 
 #[derive(Debug, Clone, Copy)]
 pub struct CompassState {
@@ -23,13 +22,13 @@ pub struct NavCompassState {
     pub screen_offset: f32,
 }
 
+pub static COMPASS_STATE: Mutex<Cell<CompassState>> = Mutex::new(Cell::new(CompassState {
+    temp: 0,
+    mag: (0, 0, 0),
+}));
+
 #[embassy_executor::task]
-pub async fn compass_task(
-    i2c: I2C0<'static>,
-    sda: GPIO22<'static>,
-    scl: GPIO23<'static>,
-    state: &'static Mutex<Cell<CompassState>>,
-) -> ! {
+pub async fn compass_task(i2c: I2C0<'static>, sda: GPIO22<'static>, scl: GPIO23<'static>) -> ! {
     println!("Started Compass Task");
 
     let config = Config::default();
@@ -49,7 +48,7 @@ pub async fn compass_task(
             if let Ok(temp) = qmc5883l.temp() {
                 critical_section::with(|cs| {
                     println!("mag:{:?}temp:{}", mag, temp);
-                    state.borrow(cs).set(CompassState { temp, mag });
+                    COMPASS_STATE.borrow(cs).set(CompassState { temp, mag });
                 });
             }
         }

@@ -1,9 +1,11 @@
 use arrform::*;
+use async_button::ButtonEvent;
 use core::cell::Cell;
 use critical_section::Mutex;
 use pcd8544_hal::Pcd8544;
 
 use crate::{
+    display::DrawCommand,
     generated,
     gps::NAV_PVT_STATE,
     landmark::Landmark,
@@ -13,7 +15,7 @@ use crate::{
     },
 };
 
-mod sprites {
+pub mod sprites {
     use embassy_time::Duration;
 
     pub type Frame = &'static [u8; 504];
@@ -74,7 +76,7 @@ mod sprites {
 
 pub static UI: Mutex<Cell<UserInterface>> = Mutex::new(Cell::new(UserInterface {
     landmark_index: 0,
-    menu: Menu::Boot,
+
     anim: None,
 }));
 
@@ -128,9 +130,10 @@ impl Menu {
 //
 // 12345678901234
 
+#[derive(Default)]
 pub struct UserInterface {
     landmark_index: usize,
-    menu: Menu,
+    // menu: Menu,
     anim: Option<Anim>,
 }
 
@@ -142,6 +145,14 @@ enum UI {
 }
 
 impl UserInterface {
+    pub fn process(&mut self) -> &'static [DrawCommand] {
+        &[]
+    }
+
+    pub fn process_input(&mut self, event: ButtonEvent) {
+        //
+    }
+
     pub async fn run(self) -> ! {
         // draw boot logo
         // wait
@@ -254,12 +265,4 @@ mod screen {
             // embedded_graphics::framebuffer::
         }
     }
-}
-
-pub enum DrawCommand {
-    Char(u8),
-    Str(&'static str),
-    Frame(Frame),
-    SetPos(u8, u8),
-    Clear,
 }

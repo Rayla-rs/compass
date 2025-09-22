@@ -6,11 +6,13 @@
     holding buffers for the duration of a data transfer."
 )]
 
+use compass::app::App;
+use compass::button::button_task;
 use compass::compass::compass_task;
-use compass::display::display_task;
+use compass::display::Display;
+use compass::gps::gps_task;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{self, InputConfig, RtcPinWithResistors};
 use esp_hal::peripherals::*;
@@ -37,39 +39,40 @@ async fn main(spawner: Spawner) -> ! {
     let peripherals = esp_hal::init(config);
     let timer0 = SystemTimer::new(peripherals.SYSTIMER);
     esp_hal_embassy::init(timer0.alarm0);
-
     println!("Embassy initialized!");
 
-    // Spawn Tasks
-    // spawner.must_spawn(button_deep_sleep_task(peripherals.GPIO4, peripherals.LPWR));
-    // spawner.must_spawn(gps_task(
-    //     peripherals.UART1,
-    //     peripherals.GPIO17,
-    //     peripherals.GPIO16,
-    // ));
+    spawner.must_spawn(gps_task(
+        peripherals.UART1,
+        peripherals.GPIO17,
+        peripherals.GPIO16,
+    ));
     spawner.must_spawn(compass_task(
         peripherals.I2C0,
         peripherals.GPIO22,
         peripherals.GPIO23,
     ));
-    spawner.must_spawn(display_task(
-        peripherals.SPI2,
-        peripherals.GPIO19,
-        peripherals.GPIO18,
-        peripherals.GPIO20,
-        peripherals.GPIO0,
-        peripherals.GPIO1,
-        peripherals.GPIO21,
-    ));
 
-    loop {
-        Timer::after(Duration::from_millis(50)).await;
-    }
+    spawner.must_spawn(button_task(peripherals.GPIO2));
+
+    App::new(
+        Display::new(
+            peripherals.SPI2,
+            peripherals.GPIO19,
+            peripherals.GPIO18,
+            peripherals.GPIO20,
+            peripherals.GPIO0,
+            peripherals.GPIO1,
+            peripherals.GPIO21,
+        )
+        .await,
+    )
+    .run()
+    .await
 }
 
 /// Task that awaits button press to shutdown the esp
 #[embassy_executor::task]
-async fn button_deep_sleep_task(mut pin: GPIO4<'static>, lpwr: LPWR<'static>) -> ! {
+async fn _button_deep_sleep_task(mut pin: GPIO4<'static>, lpwr: LPWR<'static>) -> ! {
     println!("Started Button Deep Sleep Task");
 
     let mut rtc = Rtc::new(lpwr);
